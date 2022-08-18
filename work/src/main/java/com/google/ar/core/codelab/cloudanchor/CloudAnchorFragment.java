@@ -33,6 +33,7 @@ import androidx.fragment.app.Fragment;
 import com.google.ar.core.Anchor;
 import com.google.ar.core.ArCoreApk;
 import com.google.ar.core.Camera;
+import com.google.ar.core.Config;
 import com.google.ar.core.Frame;
 import com.google.ar.core.HitResult;
 import com.google.ar.core.Plane;
@@ -43,6 +44,7 @@ import com.google.ar.core.Session;
 import com.google.ar.core.Trackable;
 import com.google.ar.core.TrackingState;
 import com.google.ar.core.codelab.cloudanchor.helpers.CameraPermissionHelper;
+import com.google.ar.core.codelab.cloudanchor.helpers.CloudAnchorManager;
 import com.google.ar.core.codelab.cloudanchor.helpers.SnackbarHelper;
 import com.google.ar.core.codelab.cloudanchor.helpers.TapHelper;
 import com.google.ar.core.codelab.cloudanchor.helpers.TrackingStateHelper;
@@ -68,7 +70,16 @@ import javax.microedition.khronos.opengles.GL10;
  * <p>This is where the AR Session and the Cloud Anchors are managed.
  */
 public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Renderer {
-
+  private synchronized void onHostedAnchorAvailable(Anchor anchor) {
+    Anchor.CloudAnchorState cloudState = anchor.getCloudAnchorState();
+    if (cloudState == Anchor.CloudAnchorState.SUCCESS) {
+      messageSnackbarHelper.showMessage(
+              getActivity(), "Cloud Anchor Hosted. ID: " + anchor.getCloudAnchorId());
+      currentAnchor = anchor;
+    } else {
+      messageSnackbarHelper.showMessage(getActivity(), "Error while hosting: " + cloudState.toString());
+    }
+  }
   private static final String TAG = CloudAnchorFragment.class.getSimpleName();
 
   // Rendering. The Renderers are created here, and initialized when the GL surface is created.
@@ -78,6 +89,7 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
 
   private Session session;
   private final SnackbarHelper messageSnackbarHelper = new SnackbarHelper();
+  private final CloudAnchorManager cloudAnchorManager = new CloudAnchorManager();
   private DisplayRotationHelper displayRotationHelper;
   private TrackingStateHelper trackingStateHelper;
   private TapHelper tapHelper;
@@ -151,7 +163,10 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
 
         // Create the session.
         session = new Session(requireActivity());
-
+        // Configure the session.
+        Config config = new Config(session);
+        config.setCloudAnchorMode(Config.CloudAnchorMode.ENABLED);
+        session.configure(config);
       } catch (UnavailableArcoreNotInstalledException
           | UnavailableUserDeclinedInstallationException e) {
         message = "Please install ARCore";
@@ -267,6 +282,7 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
       // UpdateMode.BLOCKING (it is by default), this will throttle the rendering to the
       // camera framerate.
       Frame frame = session.update();
+      cloudAnchorManager.onUpdate();
       Camera camera = frame.getCamera();
 
       // Handle one tap per frame.
@@ -354,6 +370,8 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
           // space. This anchor is created on the Plane to place the 3D model
           // in the correct position relative both to the world and to the plane.
           currentAnchor = hit.createAnchor();
+          messageSnackbarHelper.showMessage(getActivity(), "Now hosting anchor...");
+          cloudAnchorManager.hostCloudAnchor(session, currentAnchor, /* ttl= */ 300, this::onHostedAnchorAvailable);
           break;
         }
       }
@@ -374,6 +392,7 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
 
   private synchronized void onClearButtonPressed() {
     // Clear the anchor from the scene.
-    currentAnchor = null;
-  }
+    cloudAnchorManager.clearListeners();
+
+    currentAnchor = null;  }
 }
