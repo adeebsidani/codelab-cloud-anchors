@@ -16,6 +16,7 @@
 
 package com.google.ar.core.codelab.cloudanchor;
 
+import android.app.Activity;
 import android.content.Context;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
@@ -45,7 +46,10 @@ import com.google.ar.core.Trackable;
 import com.google.ar.core.TrackingState;
 import com.google.ar.core.codelab.cloudanchor.helpers.CameraPermissionHelper;
 import com.google.ar.core.codelab.cloudanchor.helpers.CloudAnchorManager;
+import com.google.ar.core.codelab.cloudanchor.helpers.FirebaseManager;
+import com.google.ar.core.codelab.cloudanchor.helpers.ResolveDialogFragment;
 import com.google.ar.core.codelab.cloudanchor.helpers.SnackbarHelper;
+import com.google.ar.core.codelab.cloudanchor.helpers.StorageManager;
 import com.google.ar.core.codelab.cloudanchor.helpers.TapHelper;
 import com.google.ar.core.codelab.cloudanchor.helpers.TrackingStateHelper;
 import com.google.ar.core.codelab.cloudanchor.rendering.BackgroundRenderer;
@@ -70,30 +74,41 @@ import javax.microedition.khronos.opengles.GL10;
  * <p>This is where the AR Session and the Cloud Anchors are managed.
  */
 public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Renderer {
+
   private synchronized void onHostedAnchorAvailable(Anchor anchor) {
     Anchor.CloudAnchorState cloudState = anchor.getCloudAnchorState();
     if (cloudState == Anchor.CloudAnchorState.SUCCESS) {
-      messageSnackbarHelper.showMessage(
-              getActivity(), "Cloud Anchor Hosted. ID: " + anchor.getCloudAnchorId());
+      String cloudAnchorId = anchor.getCloudAnchorId();
+      firebaseManager.nextShortCode(shortCode -> {
+        if (shortCode != null) {
+          firebaseManager.storeUsingShortCode(shortCode, cloudAnchorId);
+          messageSnackbarHelper.showMessage(getActivity(), "Cloud Anchor Hosted. Short code: " + shortCode);
+        } else {
+          // Firebase could not provide a short code.
+          messageSnackbarHelper.showMessage(getActivity(), "Cloud Anchor Hosted, but could not "
+                  + "get a short code from Firebase.");
+        }
+      });
       currentAnchor = anchor;
     } else {
       messageSnackbarHelper.showMessage(getActivity(), "Error while hosting: " + cloudState.toString());
     }
   }
+
   private static final String TAG = CloudAnchorFragment.class.getSimpleName();
 
   // Rendering. The Renderers are created here, and initialized when the GL surface is created.
   private GLSurfaceView surfaceView;
 
   private boolean installRequested;
-
+  private Button resolveButton;
   private Session session;
   private final SnackbarHelper messageSnackbarHelper = new SnackbarHelper();
   private final CloudAnchorManager cloudAnchorManager = new CloudAnchorManager();
   private DisplayRotationHelper displayRotationHelper;
   private TrackingStateHelper trackingStateHelper;
   private TapHelper tapHelper;
-
+  private FirebaseManager firebaseManager;
   private final BackgroundRenderer backgroundRenderer = new BackgroundRenderer();
   private final ObjectRenderer virtualObject = new ObjectRenderer();
   private final ObjectRenderer virtualObjectShadow = new ObjectRenderer();
@@ -113,6 +128,13 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
     super.onAttach(context);
     tapHelper = new TapHelper(context);
     trackingStateHelper = new TrackingStateHelper(requireActivity());
+    firebaseManager = new FirebaseManager(context);
+  }
+
+  private synchronized void onResolveButtonPressed() {
+    ResolveDialogFragment dialog = ResolveDialogFragment.createWithOkListener(
+            this::onShortCodeEntered);
+    dialog.show(getActivity().getSupportFragmentManager(), "Resolve");
   }
 
   @Override
@@ -134,6 +156,8 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
 
     Button clearButton = rootView.findViewById(R.id.clear_button);
     clearButton.setOnClickListener(v -> onClearButtonPressed());
+    resolveButton = rootView.findViewById(R.id.resolve_button);
+    resolveButton.setOnClickListener(v -> onResolveButtonPressed());
 
     return rootView;
   }
@@ -370,6 +394,7 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
           // space. This anchor is created on the Plane to place the 3D model
           // in the correct position relative both to the world and to the plane.
           currentAnchor = hit.createAnchor();
+          getActivity().runOnUiThread(() -> resolveButton.setEnabled(false));
           messageSnackbarHelper.showMessage(getActivity(), "Now hosting anchor...");
           cloudAnchorManager.hostCloudAnchor(session, currentAnchor, /* ttl= */ 300, this::onHostedAnchorAvailable);
           break;
@@ -393,6 +418,39 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
   private synchronized void onClearButtonPressed() {
     // Clear the anchor from the scene.
     cloudAnchorManager.clearListeners();
+    resolveButton.setEnabled(true);
 
     currentAnchor = null;  }
+  private synchronized void onShortCodeEntered(int shortCode) {
+    firebaseManager.getCloudAnchorId(shortCode, cloudAnchorId -> {
+      if (cloudAnchorId == null || cloudAnchorId.isEmpty()) {
+        messageSnackbarHelper.showMessage(
+                getActivity(),
+                "A Cloud Anchor ID for the short code " + shortCode + " was not found.");
+        return;
+      }
+      resolveButton.setEnabled(false);
+      cloudAnchorManager.resolveCloudAnchor(
+              session,
+              cloudAnchorId,
+              anchor -> onResolvedAnchorAvailable(anchor, shortCode));
+    });
+  }
+
+
+  private synchronized void onResolvedAnchorAvailable(Anchor anchor, int shortCode) {
+    Anchor.CloudAnchorState cloudState = anchor.getCloudAnchorState();
+    if (cloudState == Anchor.CloudAnchorState.SUCCESS) {
+      messageSnackbarHelper.showMessage(getActivity(), "Cloud Anchor Resolved. Short code: " + shortCode);
+      currentAnchor = anchor;
+    } else {
+      messageSnackbarHelper.showMessage(
+              getActivity(),
+              "Error while resolving anchor with short code "
+                      + shortCode
+                      + ". Error: "
+                      + cloudState.toString());
+      resolveButton.setEnabled(true);
+    }
+  }
 }

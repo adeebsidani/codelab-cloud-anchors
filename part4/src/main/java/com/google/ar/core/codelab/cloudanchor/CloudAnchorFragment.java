@@ -461,4 +461,5 @@ public class CloudAnchorFragment extends Fragment implements GLSurfaceView.Rende
       resolveButton.setEnabled(true);
     }
   }
+
 }
